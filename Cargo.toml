@@ -1,0 +1,13 @@
+[package]
+name = "normal_img"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.31.1", features = ["wgpu"] }
+egui = "0.31.1"
+egui-wgpu = "0.31.1"
+wgpu = "25.0.0"
+egui_extras = { version = "0.31.1", features = ["image"] }
+rfd = "0.15.3"
+image = "0.25.6"
