@@ -130,10 +130,6 @@ impl eframe::App for ImageViewer {
                             central_panel_width * 0.9,
                             central_panel_height * 0.9,
                         )));
-                        // let response = ui.add(image);
-                        // if response.on_hover_text("Failed to load image").hovered() {
-                        //     ui.colored_label(egui::Color32::RED, "⚠️ 画像の読み込みに失敗しました");
-                        // }
                     });
 
                     // 画像情報表示
