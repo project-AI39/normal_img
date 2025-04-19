@@ -8,6 +8,6 @@ eframe = { version = "0.31.1", features = ["wgpu"] }
 egui = "0.31.1"
 egui-wgpu = "0.31.1"
 wgpu = "25.0.0"
-egui_extras = { version = "0.31.1", features = ["image"] }
+egui_extras = { version = "0.31.1", features = ["default", "all_loaders"] }
 rfd = "0.15.3"
-image = "0.25.6"
+image = { version = "0.25.6", features = ["jpeg", "png", "webp"] }

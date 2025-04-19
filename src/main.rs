@@ -1,7 +1,7 @@
 use eframe::{self, egui};
 use rfd::FileDialog;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -10,11 +10,11 @@ fn main() -> Result<(), eframe::Error> {
     };
 
     eframe::run_native(
-        "画像ビュアー",
+        "Image Viewer",
         options,
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Box::new(ImageViewer::default())
+            Ok(Box::new(ImageViewer::default()))
         }),
     )
 }
@@ -86,7 +86,7 @@ impl eframe::App for ImageViewer {
         egui::CentralPanel::default().show(ctx, |ui| {
             // トップバー
             ui.horizontal(|ui| {
-                if ui.button("フォルダを開く").clicked() {
+                if ui.button("Open Folder").clicked() {
                     if let Some(path) = FileDialog::new().pick_folder() {
                         self.directory_path = Some(path.display().to_string());
                         self.load_images_from_directory(path);
@@ -95,18 +95,18 @@ impl eframe::App for ImageViewer {
 
                 let has_images = !self.images.is_empty();
                 ui.add_enabled_ui(has_images, |ui| {
-                    if ui.button("←").clicked() {
+                    if ui.button("<").clicked() {
                         self.prev_image();
                     }
 
-                    if ui.button("→").clicked() {
+                    if ui.button(">").clicked() {
                         self.next_image();
                     }
                 });
 
                 // 現在のディレクトリを表示
                 if let Some(dir) = &self.directory_path {
-                    ui.label(format!("ディレクトリ: {}", dir));
+                    ui.label(format!("Directory: {}", dir));
                 }
             });
 
@@ -119,7 +119,10 @@ impl eframe::App for ImageViewer {
             if !self.images.is_empty() {
                 let image_path = &self.images[self.current_image_index];
                 if let Some(path_str) = image_path.to_str() {
-                    let image_url = format!("file://{}", path_str);
+                    let image_url = format!(
+                        "file://{}",
+                        path_str.replace('\\', "/") // Windowsパス対策
+                    );
 
                     // 画像を中央に表示し、UIに合わせてサイズ調整
                     ui.vertical_centered(|ui| {
@@ -127,18 +130,22 @@ impl eframe::App for ImageViewer {
                             central_panel_width * 0.9,
                             central_panel_height * 0.9,
                         )));
+                        // let response = ui.add(image);
+                        // if response.on_hover_text("Failed to load image").hovered() {
+                        //     ui.colored_label(egui::Color32::RED, "⚠️ 画像の読み込みに失敗しました");
+                        // }
                     });
 
                     // 画像情報表示
                     ui.horizontal(|ui| {
                         ui.label(format!(
-                            "画像 {}/{}：{}",
+                            "Image {}/{}: {}",
                             self.current_image_index + 1,
                             self.images.len(),
                             image_path
                                 .file_name()
                                 .and_then(|f| f.to_str())
-                                .unwrap_or("不明なファイル名")
+                                .unwrap_or("Unknown filename")
                         ));
                     });
                 }
@@ -146,7 +153,7 @@ impl eframe::App for ImageViewer {
                 // 画像がない場合
                 ui.vertical_centered(|ui| {
                     ui.add_space(central_panel_height * 0.4);
-                    ui.label("画像が選択されていません。フォルダを開いてください。");
+                    ui.label("No images selected. Please open a folder.");
                 });
             }
         });
