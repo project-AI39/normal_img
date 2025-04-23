@@ -169,6 +169,13 @@ fn register_wgpu_texture_to_egui(
     }
 }
 
+fn unregister_wgpu_texture_from_egui(frame: &mut eframe::Frame, texture_id: egui::TextureId) {
+    if let Some(render_state) = frame.wgpu_render_state() {
+        let mut renderer = render_state.renderer.write();
+        renderer.free_texture(&texture_id);
+    }
+}
+
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
