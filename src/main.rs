@@ -211,7 +211,6 @@ fn load_and_register_texture(
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Drop用にframeを保存（unsafe: drop時に使うため）
-        self.last_frame = Some(frame as *mut _);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // フォルダ選択
