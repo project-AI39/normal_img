@@ -106,14 +106,14 @@ fn create_gpu_texture_from_rgba8_aligned(
 
     // GPUへ画像データ転送
     queue.write_texture(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &texture,
             mip_level: 0,
             origin: Origin3d::ZERO,
             aspect: TextureAspect::All,
         },
         &padded_data,
-        wgpu::ImageDataLayout {
+        wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(padded_bytes_per_row as u32),
             rows_per_image: Some(height),
