@@ -17,8 +17,6 @@ pub struct MyApp {
     current_texture_id: Option<egui::TextureId>,
     current_size: Option<(u32, u32)>,
     prev_index: usize,
-    // Dropで使うために最後のFrameを保存
-    last_frame: Option<*mut eframe::Frame>,
 }
 
 impl Default for MyApp {
@@ -30,7 +28,6 @@ impl Default for MyApp {
             current_texture_id: None,
             current_size: None,
             prev_index: usize::MAX, // 強制的に初回ロード
-            last_frame: None,
         }
     }
 }
@@ -270,22 +267,6 @@ impl eframe::App for MyApp {
                 ui.image((texture_id, egui::Vec2::new(width as f32, height as f32)));
             }
         });
-    }
-}
-
-// Dropトレイトでリソース解放
-impl Drop for MyApp {
-    fn drop(&mut self) {
-        if let (Some(texture_id), Some(frame_ptr)) =
-            (self.current_texture_id.take(), self.last_frame)
-        {
-            // 安全性: drop時にframeがまだ有効であることを保証できないので、実運用では注意
-            unsafe {
-                if let Some(frame) = frame_ptr.as_mut() {
-                    unregister_wgpu_texture_from_egui(frame, texture_id);
-                }
-            }
-        }
     }
 }
 
