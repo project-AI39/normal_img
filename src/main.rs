@@ -8,13 +8,23 @@ use eframe::{
 use egui::TextureId;
 use image::{ImageError, flat::View};
 use rfd::FileDialog;
+use std::fmt;
 use std::fs;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
 use wgpu::{
     AddressMode, Device, Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerDescriptor,
     Texture, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     TextureView, TextureViewDescriptor,
 };
+
+// 画像デコードライブラリ
+use libwebp::WebPDecodeRGBA;
+use libwebp::error::WebPSimpleError as WebPError;
+use png::{BitDepth, ColorType, Decoder, Encoder};
+use turbojpeg::{Decompressor, Image, PixelFormat, Subsamp, compress_image, decompress_image};
+
 macro_rules! meas {
     ($x:expr) => {{
         let start = std::time::Instant::now();
@@ -30,6 +40,52 @@ macro_rules! meas {
         );
         result
     }};
+}
+
+// ImageDecodeErrorのDisplayトレイト実装
+impl fmt::Display for ImageDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ImageDecodeError::Io(e) => write!(f, "I/Oエラー: {}", e),
+            ImageDecodeError::Png(e) => write!(f, "PNGデコードエラー: {}", e),
+            ImageDecodeError::Jpeg(e) => write!(f, "JPEGデコードエラー: {}", e),
+            ImageDecodeError::WebP(e) => write!(f, "WebPデコードエラー: {:?}", e),
+            ImageDecodeError::UnsupportedFormat => write!(f, "サポートされていない画像形式"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ImageDecodeError {
+    Io(std::io::Error),
+    Png(png::DecodingError),
+    Jpeg(turbojpeg::Error),
+    WebP(libwebp::error::WebPSimpleError),
+    UnsupportedFormat,
+}
+
+impl From<std::io::Error> for ImageDecodeError {
+    fn from(err: std::io::Error) -> Self {
+        ImageDecodeError::Io(err)
+    }
+}
+
+impl From<png::DecodingError> for ImageDecodeError {
+    fn from(e: png::DecodingError) -> Self {
+        ImageDecodeError::Png(e)
+    }
+}
+
+impl From<turbojpeg::Error> for ImageDecodeError {
+    fn from(err: turbojpeg::Error) -> Self {
+        ImageDecodeError::Jpeg(err)
+    }
+}
+
+impl From<libwebp::error::WebPSimpleError> for ImageDecodeError {
+    fn from(e: libwebp::error::WebPSimpleError) -> Self {
+        ImageDecodeError::WebP(e)
+    }
 }
 
 pub struct MyApp {
@@ -74,12 +130,60 @@ fn get_image_files(dir: &str) -> Vec<PathBuf> {
 }
 
 // 指定パスの画像をRGBA8形式でデコードし、バイト列と幅・高さを返す
-fn decode_image_to_rgba8(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), ImageError> {
-    let img = image::open(path)?;
-    let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    let bytes = rgba.into_raw();
-    Ok((bytes, width, height))
+// fn decode_image_to_rgba8(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), ImageError> {
+//     let img = image::open(path)?;
+//     let rgba = img.to_rgba8();
+//     let (width, height) = rgba.dimensions();
+//     let bytes = rgba.into_raw();
+//     Ok((bytes, width, height))
+// }
+fn decode_image_to_rgba8(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "png" => decode_png_to_rgba8(path),
+        "jpg" | "jpeg" => decode_jpeg_to_rgba8(path),
+        "webp" => decode_webp_to_rgba8(path),
+        _ => Err(ImageDecodeError::UnsupportedFormat),
+    }
+}
+
+fn decode_png_to_rgba8(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
+    let file = File::open(path)?;
+    let decoder = Decoder::new(BufReader::new(file));
+    let mut reader = decoder.read_info()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf)?;
+    buf.truncate(info.buffer_size());
+    Ok((buf, info.width, info.height))
+}
+
+fn decode_jpeg_to_rgba8(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
+    let data = std::fs::read(path)?;
+    let mut decompressor = Decompressor::new()?;
+    let header = decompressor.read_header(&data)?;
+
+    let mut image = Image {
+        pixels: vec![0; (header.width * header.height * 4) as usize],
+        width: header.width,
+        pitch: header.width * 4,
+        height: header.height,
+        format: PixelFormat::RGBA,
+    };
+
+    decompressor.decompress(&data, image.as_deref_mut())?;
+    Ok((image.pixels, image.width as u32, image.height as u32))
+}
+
+// WebPデコード関数
+fn decode_webp_to_rgba8(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
+    let data = std::fs::read(path)?;
+    let (width, height, buf) = libwebp::WebPDecodeRGBA(&data)?;
+    Ok((buf.to_vec(), width, height)) // to_vec() で変換
 }
 
 /// RGBA8画像データをGPUに転送しテクスチャを作成する（アライメント対応）
