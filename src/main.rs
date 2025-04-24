@@ -1,6 +1,12 @@
-use eframe::{NativeOptions, egui, wgpu};
+use eframe::{
+    NativeOptions, egui,
+    wgpu::{
+        self,
+        core::device::{self, queue},
+    },
+};
 use egui::TextureId;
-use image::ImageError;
+use image::{ImageError, flat::View};
 use rfd::FileDialog;
 use std::fs;
 use std::path::PathBuf;
@@ -9,6 +15,22 @@ use wgpu::{
     Texture, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     TextureView, TextureViewDescriptor,
 };
+macro_rules! meas {
+    ($x:expr) => {{
+        let start = std::time::Instant::now();
+        let result = $x;
+        let end = start.elapsed();
+        let total_ms = end.as_secs() * 1000 + end.subsec_millis() as u64;
+        println!(
+            "{} Elapsed: {}ms ({}s{}ms)",
+            stringify!($x),
+            total_ms,
+            end.as_secs(),
+            end.subsec_millis()
+        );
+        result
+    }};
+}
 
 pub struct MyApp {
     selected_folder: Option<String>,
@@ -174,36 +196,55 @@ fn load_and_register_texture(
     prev_texture_id: Option<egui::TextureId>,
 ) -> Option<(egui::TextureId, (u32, u32))> {
     // 古いテクスチャの解放
-    if let Some(texture_id) = prev_texture_id {
-        unregister_wgpu_texture_from_egui(frame, texture_id);
-    }
+    meas!({
+        if let Some(texture_id) = prev_texture_id {
+            unregister_wgpu_texture_from_egui(frame, texture_id);
+        }
+    });
 
     // 画像デコード
-    let (pixels, width, height) = match decode_image_to_rgba8(path) {
-        Ok(res) => res,
-        Err(e) => {
-            eprintln!("Failed to decode image: {}", e);
-            return None;
-        }
-    };
+    let pixels;
+    let width;
+    let height;
+    meas!({
+        (pixels, width, height) = match decode_image_to_rgba8(path) {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("Failed to decode image: {}", e);
+                return None;
+            }
+        };
+    });
 
     // wgpuデバイス・キュー取得
-    let render_state = match frame.wgpu_render_state() {
-        Some(rs) => rs,
-        None => {
-            eprintln!("wgpu_render_state not available");
-            return None;
-        }
-    };
-    let device = &render_state.device;
-    let queue = &render_state.queue;
+    let device;
+    let queue;
+    meas!({
+        let render_state = match frame.wgpu_render_state() {
+            Some(rs) => rs,
+            None => {
+                eprintln!("wgpu_render_state not available");
+                return None;
+            }
+        };
+        device = &render_state.device;
+        queue = &render_state.queue;
+    });
 
     // テクスチャ作成
-    let (_texture, view, sampler) =
-        create_gpu_texture_from_rgba8_aligned(device, queue, &pixels, width, height);
+    let _texture;
+    let view;
+    let sampler;
+    meas!({
+        (_texture, view, sampler) =
+            create_gpu_texture_from_rgba8_aligned(device, queue, &pixels, width, height);
+    });
 
     // eguiにテクスチャ登録
-    let texture_id = register_wgpu_texture_to_egui(frame, &view, &sampler);
+    let texture_id;
+    meas!({
+        texture_id = register_wgpu_texture_to_egui(frame, &view, &sampler);
+    });
 
     Some((texture_id, (width, height)))
 }
@@ -245,25 +286,29 @@ impl eframe::App for MyApp {
 
             // 画像切り替え時のみロード＆登録
             if !self.image_files.is_empty() && self.current_index != self.prev_index {
-                if let Some(path) = self.image_files.get(self.current_index) {
-                    let result =
-                        load_and_register_texture(frame, path, self.current_texture_id.take());
-                    if let Some((texture_id, size)) = result {
-                        self.current_texture_id = Some(texture_id);
-                        self.current_size = Some(size);
-                    } else {
-                        self.current_texture_id = None;
-                        self.current_size = None;
+                meas!({
+                    if let Some(path) = self.image_files.get(self.current_index) {
+                        let result =
+                            load_and_register_texture(frame, path, self.current_texture_id.take());
+                        if let Some((texture_id, size)) = result {
+                            self.current_texture_id = Some(texture_id);
+                            self.current_size = Some(size);
+                        } else {
+                            self.current_texture_id = None;
+                            self.current_size = None;
+                        }
                     }
-                }
-                self.prev_index = self.current_index;
+                    self.prev_index = self.current_index;
+                })
             }
 
             // 画像表示
             if let (Some(texture_id), Some((width, height))) =
                 (self.current_texture_id, self.current_size)
             {
-                ui.image((texture_id, egui::Vec2::new(width as f32, height as f32)));
+                // ui.image((texture_id, egui::Vec2::new(width as f32, height as f32)));
+                let available = ui.available_size();
+                ui.image((texture_id, available));
             }
         });
     }
