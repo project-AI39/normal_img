@@ -1,0 +1,39 @@
+
+MyApp{
+    
+    TextureRegisterReceiver() 
+    ui_get_folder_button()
+    ui_Previous_image_button()
+    ui_Next_image_button()
+
+    on_image_index_changed()
+
+    ui_show_image()
+}
+
+fn TextureRegisterReceiver(){ バックグラウンドスレッドからテクスチャ登録要求を受信＆処理
+
+    register_wgpu_texture_to_egui() テクスチャを登録
+    get_size_bytes()
+
+}
+
+fn get_size_bytes(width,height){ 高さと幅からパディングを含めた画像データのバイトを計算する
+return size_bytes
+}
+
+
+
+fn on_image_index_changed(){
+
+    build_prefetch_list()
+
+}
+
+fn build_prefetch_list(){ 現在インデックスを中心に、VRAM制限内でキャッシュすべき画像リストを構築する
+
+    get_cacheimagelist_and_cachebytes() キャッシュ済み画像のリストとデータ量を取得
+    sort_imagefiles() 現在インデックス(表示中の画像)から近い順にソート
+
+
+}
