@@ -24,11 +24,13 @@ use eframe::{
 };
 use image::{ImageError, flat::View};
 use libwebp::{WebPDecodeRGBA, WebPGetInfo, error::WebPSimpleError as WebPError};
+use multipool::ThreadPoolBuilder;
+use multipool::pool::ThreadPool;
+use multipool::pool::modes::PriorityGlobalQueueMode;
 use num_cpus;
 use png::{BitDepth, ColorType, Decoder, Encoder};
 use rfd::FileDialog;
 use turbojpeg::{Decompressor, Image, PixelFormat, Subsamp, compress_image, decompress_image};
-
 // --- プリフェッチタスク ---
 #[derive(Debug)]
 struct PrefetchTask {
@@ -342,42 +344,50 @@ fn cleanup_old_prefetch_tasks(prefetch_list: &[PrefetchTask], app: &mut MyApp) {
     app.prefetch_tasks.retain(|task| !task.is_cancelled());
 }
 /// 未キャッシュ画像をバックグラウンドでプリフェッチする
-fn start_prefetch_tasks(
+
+// multipoolのスレッドプールを初期化
+fn create_prefetch_pool() -> ThreadPool<PriorityGlobalQueueMode> {
+    ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get())
+        .enable_priority()
+        .build()
+}
+// プリフェッチタスク投入
+fn start_prefetch_tasks_multipool(
     prefetch_list: &[PrefetchTask],
     app: &mut MyApp,
     frame: &mut eframe::Frame,
+    pool: &ThreadPool<PriorityGlobalQueueMode>,
 ) {
-    let num_workers = num_cpus::get();
-    let mut active_tasks = 0;
+    // 必要なwgpuデバイス・キューを事前に取得
+    let render_state = match frame.wgpu_render_state() {
+        Some(rs) => rs.clone(),
+        None => {
+            eprintln!("wgpu_render_state not available");
+            return;
+        }
+    };
+    let device = Arc::new(render_state.device.clone());
+    let queue = Arc::new(render_state.queue.clone());
+
     for task in prefetch_list {
         if task.is_cached {
             continue;
         }
-        if active_tasks >= num_workers {
-            break;
-        }
+        // 既存タスクの重複投入防止（必要ならHashSet等で管理）
+
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let image_files = app.image_files.clone();
         let idx = task.index;
-        let queue = app.prefetch_queue.clone();
-        // 必要に応じてwgpu device/queue, frame, vram_cache等をArc/Mutexで渡す
-        // wgpuデバイス・キュー取得
-        let render_state = match frame.wgpu_render_state() {
-            Some(rs) => rs.clone(), // Clone the render state to avoid borrowing `frame`
-            None => {
-                eprintln!("wgpu_render_state not available");
-                return;
-            }
-        };
-        let device = render_state.device.clone();
-        let queue = render_state.queue.clone();
+        let priority = task.priority;
         let tx = app.texture_register_tx.clone();
-        thread::spawn({
-            let cancel_flag = cancel_flag.clone();
-            let device = device.clone();
-            let queue = queue.clone();
+        let device = device.clone();
+        let queue = queue.clone();
+        let cancel_flag_clone = cancel_flag.clone();
+
+        pool.spawn_with_priority(
             move || {
-                if cancel_flag.load(Ordering::SeqCst) {
+                if cancel_flag_clone.load(Ordering::SeqCst) {
                     return;
                 }
                 // 画像デコード
@@ -385,19 +395,17 @@ fn start_prefetch_tasks(
                     Ok(res) => res,
                     Err(_) => return,
                 };
-                if cancel_flag.load(Ordering::SeqCst) {
+                if cancel_flag_clone.load(Ordering::SeqCst) {
                     return;
                 }
-                // GPU転送・egui登録・vram_cache登録
-                let (texture, view, sampler) = create_gpu_texture_from_rgba8_aligned(
-                    Arc::new(device.clone()),
-                    Arc::new(queue.clone()),
+                // GPU転送・egui登録
+                let (_texture, view, sampler) = create_gpu_texture_from_rgba8_aligned(
+                    device.clone(),
+                    queue.clone(),
                     &pixels,
                     width,
                     height,
                 );
-                // Use a channel or other thread-safe mechanism to communicate with the main thread
-                // to register the texture with egui in the main thread.
                 let _ = tx.send(TextureRegisterRequest {
                     index: idx,
                     texture_view: view,
@@ -405,23 +413,23 @@ fn start_prefetch_tasks(
                     width,
                     height,
                 });
-            }
-        });
+            },
+            priority,
+        );
 
         app.prefetch_tasks.push(PrefetchTaskHandle {
             index: idx,
             cancel_flag,
         });
-        active_tasks += 1;
     }
 }
+
 /// 画像インデックス変更時にキャッシュ・プリフェッチを制御
 fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {
     vram_cache_check(app);
     let prefetch_list = build_prefetch_list(app);
     release_unused_vram_images(&prefetch_list, app, frame);
     cleanup_old_prefetch_tasks(&prefetch_list, app);
-    start_prefetch_tasks(&prefetch_list, app, frame);
 }
 /// RGBA8画像データをGPUに転送しテクスチャを作成する（パディング対応）
 fn create_gpu_texture_from_rgba8_aligned(
