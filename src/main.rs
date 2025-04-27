@@ -138,6 +138,7 @@ pub struct MyApp {
     prefetch_queue: Arc<Mutex<BinaryHeap<PrefetchTask>>>,
     texture_register_tx: Sender<TextureRegisterRequest>,
     texture_register_rx: Receiver<TextureRegisterRequest>,
+    pub pool: ThreadPool<PriorityGlobalQueueMode>,
 }
 struct TextureRegisterRequest {
     index: usize,
@@ -164,6 +165,7 @@ impl Default for MyApp {
             prefetch_queue: Arc::new(Mutex::new(BinaryHeap::new())),
             texture_register_tx: tx,
             texture_register_rx: rx,
+            pool: create_prefetch_pool(),
         }
     }
 }
@@ -430,6 +432,7 @@ fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {
     let prefetch_list = build_prefetch_list(app);
     release_unused_vram_images(&prefetch_list, app, frame);
     cleanup_old_prefetch_tasks(&prefetch_list, app);
+    start_prefetch_tasks_multipool(&prefetch_list, app, frame, &app.pool);
 }
 /// RGBA8画像データをGPUに転送しテクスチャを作成する（パディング対応）
 fn create_gpu_texture_from_rgba8_aligned(
