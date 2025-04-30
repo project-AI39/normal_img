@@ -35,6 +35,7 @@ pub struct MyApp {
     image_files: Vec<PathBuf>,
     current_index: usize,
     previous_index: usize,
+    priority_list: Vec<usize>,
 }
 
 impl Default for MyApp {
@@ -44,6 +45,7 @@ impl Default for MyApp {
             image_files: Vec::new(),
             current_index: 0,
             previous_index: 0,
+            priority_list: Vec::new(),
         }
     }
 }
@@ -66,12 +68,19 @@ impl eframe::App for MyApp {
             navigation_buttons(self, ui);
             if !self.image_files.is_empty() && self.current_index != self.previous_index {
                 on_image_index_changed(self, frame);
+                self.previous_index = self.current_index;
             }
         });
     }
 }
 
-fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {}
+fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {
+    build_prefetch_list(app);
+}
+
+fn build_prefetch_list(app: &mut MyApp) {
+    // 処理を追加
+}
 
 // フォルダ選択
 fn folder_dialog(app: &mut MyApp, ui: &mut Ui) {
