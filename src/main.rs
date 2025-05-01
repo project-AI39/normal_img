@@ -76,11 +76,34 @@ impl eframe::App for MyApp {
 
 fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {
     build_prefetch_list(app);
+    println!("Prefetching images: {:?}", app.priority_list);
 }
 
 fn build_prefetch_list(app: &mut MyApp) {
-    // 処理を追加
+    let total = app.image_files.len();
+    let center = app.current_index;
+    let mut indices = Vec::new();
+
+    // 前後5枚＋中心画像で最大11枚
+    // 近い順（中心→前→後→前→後...）で追加
+    indices.push(center);
+
+    for offset in 1..=5 {
+        // 前
+        if let Some(idx) = center.checked_sub(offset) {
+            indices.push(idx);
+        }
+        // 後
+        let idx = center + offset;
+        if idx < total {
+            indices.push(idx);
+        }
+    }
+
+    // 近い順に並べる（中心→中心-1→中心+1→中心-2→中心+2...）
+    app.priority_list = indices;
 }
+
 
 // フォルダ選択
 fn folder_dialog(app: &mut MyApp, ui: &mut Ui) {
