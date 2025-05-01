@@ -35,7 +35,7 @@ pub struct MyApp {
     image_files: Vec<PathBuf>,
     current_index: usize,
     previous_index: usize,
-    priority_list: Vec<usize>,
+    priority_list: Vec<PathBuf>,
 }
 
 impl Default for MyApp {
@@ -44,7 +44,7 @@ impl Default for MyApp {
             folder: None,
             image_files: Vec::new(),
             current_index: 0,
-            previous_index: 0,
+            previous_index: usize::MAX,
             priority_list: Vec::new(),
         }
     }
@@ -77,31 +77,39 @@ impl eframe::App for MyApp {
 fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {
     build_prefetch_list(app);
     println!("Prefetching images: {:?}", app.priority_list);
+    prefetch_tasks_multipool(app);
+}
+
+fn prefetch_tasks_multipool(app: &mut MyApp) {
+ 
 }
 
 fn build_prefetch_list(app: &mut MyApp) {
     let total = app.image_files.len();
     let center = app.current_index;
-    let mut indices = Vec::new();
+    let mut paths = Vec::new();
 
     // 前後5枚＋中心画像で最大11枚
     // 近い順（中心→前→後→前→後...）で追加
-    indices.push(center);
+    paths.push(app.image_files[center].clone());
 
     for offset in 1..=5 {
         // 前
-        if let Some(idx) = center.checked_sub(offset) {
-            indices.push(idx);
-        }
+        let idx = if let Some(idx) = center.checked_sub(offset) {
+            idx
+        } else {
+            total - offset
+        };
+        paths.push(app.image_files[idx].clone());
         // 後
         let idx = center + offset;
         if idx < total {
-            indices.push(idx);
+            paths.push(app.image_files[idx].clone());
         }
     }
 
     // 近い順に並べる（中心→中心-1→中心+1→中心-2→中心+2...）
-    app.priority_list = indices;
+    app.priority_list = paths;
 }
 
 
