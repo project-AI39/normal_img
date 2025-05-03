@@ -11,7 +11,7 @@ use egui::Ui;
 use image::{ImageError, flat::View};
 use libwebp::{WebPDecodeRGBA, WebPGetInfo, error::WebPSimpleError as WebPError};
 use num_cpus;
-use png::{BitDepth, ColorType, Decoder, Encoder};
+use png::{BitDepth, ColorType, Decoder, Encoder, Transformations};
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
 use rfd::FileDialog;
@@ -164,27 +164,29 @@ fn register_wgpu_texture_to_egui(
     }
 }
 
-/// GPUからテクスチャを明示的に解放する（最適化版）
-fn unregister_wgpu_texture(app: &mut MyApp, ctx: &egui::Context) {
-    // priority_listに含まれない画像のTextureIdのみ削除
-    let priority_set: std::collections::HashSet<_> = app.priority_list.iter().collect();
-
-    // retainで不要なものだけ削除しつつ、egui側も解放
-    let tex_manager = ctx.tex_manager();
-    let mut tex_manager = tex_manager.write();
-
-    // 削除対象のPathBufを集めてから削除
-    let to_remove: Vec<_> = app
+fn release_unused_textures(app: &mut MyApp, frame: &mut eframe::Frame) {
+    // プリフェッチ範囲のパスをセット化
+    let priority_set: std::collections::HashSet<_> = app.priority_list.iter().cloned().collect();
+    // 削除対象を収集
+    let unused: Vec<_> = app
         .texture_cache
-        .iter()
-        .filter(|(path, _)| !priority_set.contains(path))
-        .map(|(path, _)| path.clone())
+        .keys()
+        .filter(|path| !priority_set.contains(*path))
+        .cloned()
         .collect();
-
-    for path in to_remove {
+    // テクスチャ解放
+    for path in unused {
         if let Some(tex_id) = app.texture_cache.remove(&path) {
-            tex_manager.free(tex_id);
+            unregister_wgpu_texture(frame, tex_id);
         }
+    }
+}
+
+// unregister_wgpu_textureの実装例
+fn unregister_wgpu_texture(frame: &mut eframe::Frame, tex_id: egui::TextureId) {
+    if let Some(render_state) = frame.wgpu_render_state() {
+        let mut renderer = render_state.renderer.write();
+        renderer.free_texture(&tex_id);
     }
 }
 
@@ -239,6 +241,10 @@ fn create_gpu_texture_from_rgba8_aligned(
         let src_end = src_start + unpadded_bytes_per_row;
         let dst_start = y * padded_bytes_per_row;
         let dst_end = dst_start + unpadded_bytes_per_row;
+
+        assert!(src_end <= rgba_pixels.len(), "src_end out of bounds");
+        assert!(dst_end <= padded_data.len(), "dst_end out of bounds");
+
         padded_data[dst_start..dst_end].copy_from_slice(&rgba_pixels[src_start..src_end]);
     }
 
@@ -294,7 +300,7 @@ fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame, ctx: &egui
         return;
     }
     build_prefetch_list(app);
-    // unregister_wgpu_texture(app, ctx);
+    release_unused_textures(app, frame);
     println!("Prefetching images: {:?}", app.priority_list);
     prefetch_tasks_multipool(app);
 }
@@ -336,6 +342,8 @@ fn folder_dialog(app: &mut MyApp, ui: &mut Ui) {
         if let Some(folder) = FileDialog::new().pick_folder() {
             app.folder = Some(folder.clone());
             app.image_files = get_image_files(folder.to_str().unwrap());
+            app.current_index = 0;
+            app.previous_index = usize::MAX;
         }
     }
 }
@@ -384,6 +392,7 @@ pub enum ImageDecodeError {
     Png(png::DecodingError),
     Jpeg(turbojpeg::Error),
     WebP(libwebp::error::WebPSimpleError),
+    Image(image::ImageError),
     UnsupportedFormat,
 }
 
@@ -407,6 +416,11 @@ impl From<libwebp::error::WebPSimpleError> for ImageDecodeError {
         ImageDecodeError::WebP(e)
     }
 }
+impl From<image::ImageError> for ImageDecodeError {
+    fn from(e: image::ImageError) -> Self {
+        ImageDecodeError::Image(e)
+    }
+}
 
 /// 指定パスの画像をRGBA8形式でデコードし、ピクセルバイト列と幅・高さを返す
 fn decode_image_to_rgba8(path: &Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
@@ -424,18 +438,89 @@ fn decode_image_to_rgba8(path: &Path) -> Result<(Vec<u8>, u32, u32), ImageDecode
     }
 }
 
-/// PNG画像のデコード
+/// pngクレートを使ったPNG画像のデコード
 fn decode_png_to_rgba8(path: &Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
-    let file = File::open(path)?;
-    let decoder = png::Decoder::new(BufReader::new(file));
+    let file = std::fs::File::open(path)?;
+    let decoder = Decoder::new(file);
     let mut reader = decoder.read_info()?;
     let mut buf = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf)?;
-    buf.truncate(info.buffer_size());
-    Ok((buf, info.width, info.height))
+    let width = info.width;
+    let height = info.height;
+
+    // RGBA8に変換
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => {
+            // 既にRGBA
+            buf[..info.buffer_size()].to_vec()
+        }
+        png::ColorType::Rgb => {
+            // RGB→RGBA
+            let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+            let src = &buf[..info.buffer_size()];
+            for chunk in src.chunks(3) {
+                out.extend_from_slice(chunk);
+                out.push(255);
+            }
+            out
+        }
+        png::ColorType::Grayscale => {
+            // Gray→RGBA
+            let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+            let src = &buf[..info.buffer_size()];
+            for &g in src {
+                out.extend_from_slice(&[g, g, g, 255]);
+            }
+            out
+        }
+        png::ColorType::GrayscaleAlpha => {
+            // GrayAlpha→RGBA
+            let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+            let src = &buf[..info.buffer_size()];
+            for chunk in src.chunks(2) {
+                let g = chunk[0];
+                let a = chunk[1];
+                out.extend_from_slice(&[g, g, g, a]);
+            }
+            out
+        }
+        png::ColorType::Indexed => {
+            // Indexedカラーはパレットを参照
+            let palette = reader
+                .info()
+                .palette
+                .as_ref()
+                .ok_or(ImageDecodeError::UnsupportedFormat)?;
+            let src = &buf[..info.buffer_size()];
+            let trns = reader.info().trns.as_ref();
+            let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+            for &idx in src {
+                let i = idx as usize * 3;
+                if i + 2 >= palette.len() {
+                    return Err(ImageDecodeError::UnsupportedFormat);
+                }
+                let r = palette[i];
+                let g = palette[i + 1];
+                let b = palette[i + 2];
+                let a = if let Some(trns) = trns {
+                    if idx as usize >= trns.len() {
+                        255
+                    } else {
+                        trns[idx as usize]
+                    }
+                } else {
+                    255
+                };
+                out.extend_from_slice(&[r, g, b, a]);
+            }
+            out
+        }
+    };
+
+    Ok((rgba, width, height))
 }
 
-/// JPEG画像のデコード
+/// turbojpegクレートを使ってJPEG画像のデコード
 fn decode_jpeg_to_rgba8(path: &Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
     let data = std::fs::read(path)?;
     let mut decompressor = Decompressor::new()?;
@@ -453,7 +538,7 @@ fn decode_jpeg_to_rgba8(path: &Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeE
     Ok((image.pixels, image.width as u32, image.height as u32))
 }
 
-/// WebP画像のデコード
+/// libwebpクレートを使ってWebP画像のデコード
 fn decode_webp_to_rgba8(path: &Path) -> Result<(Vec<u8>, u32, u32), ImageDecodeError> {
     let data = std::fs::read(path)?;
     let (width, height, buf) = WebPDecodeRGBA(&data)?;
