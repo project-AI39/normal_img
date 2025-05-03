@@ -98,7 +98,7 @@ impl eframe::App for MyApp {
                     .wgpu_render_state()
                     .map(|r| (r.device.clone(), r.queue.clone()))
                 {
-                    let (_tex, view, sampler) = create_gpu_texture_from_rgba8_aligned(
+                    let (_tex, view, _sampler) = create_gpu_texture_from_rgba8_aligned(
                         std::sync::Arc::new(device),
                         std::sync::Arc::new(queue),
                         &req.pixels,
@@ -106,7 +106,7 @@ impl eframe::App for MyApp {
                         req.height,
                     );
                     // register_wgpu_texture_to_eguiを使ってTextureIdを取得
-                    let tex_id = register_wgpu_texture_to_egui(frame, &view, &sampler);
+                    let tex_id = register_wgpu_texture_to_egui(frame, &view);
                     self.texture_cache.insert(req.path.clone(), tex_id);
 
                     //print
@@ -122,7 +122,7 @@ impl eframe::App for MyApp {
             folder_dialog(self, ui);
             navigation_buttons(self, ui);
             if !self.image_files.is_empty() && self.current_index != self.previous_index {
-                on_image_index_changed(self, frame, ctx);
+                on_image_index_changed(self, frame);
                 self.previous_index = self.current_index;
             }
             // TextureIdから画像の表示
@@ -142,7 +142,6 @@ impl eframe::App for MyApp {
 fn register_wgpu_texture_to_egui(
     frame: &mut eframe::Frame,
     texture_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
 ) -> egui::TextureId {
     if let Some(render_state) = frame.wgpu_render_state() {
         let mut renderer = render_state.renderer.write();
@@ -295,7 +294,7 @@ fn create_gpu_texture_from_rgba8_aligned(
     (texture, view, sampler)
 }
 
-fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame, ctx: &egui::Context) {
+fn on_image_index_changed(app: &mut MyApp, frame: &mut eframe::Frame) {
     if app.image_files.is_empty() {
         return;
     }
