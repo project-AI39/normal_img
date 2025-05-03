@@ -9,11 +9,16 @@ use crate::gpu::{
     create_gpu_texture_from_rgba8_aligned, register_wgpu_texture_to_egui, unregister_wgpu_texture,
 };
 use crate::image::decode_image_to_rgba8;
-use crate::ui::{folder_dialog, navigation_buttons};
+use crate::ui::{folder_dialog, navigation_buttons, show_image_viewer_mesh_interactive};
 
 struct GpuImageRequest {
     pub path: PathBuf,
     pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+struct CachedTexture {
+    pub tex_id: egui::TextureId,
     pub width: u32,
     pub height: u32,
 }
@@ -28,8 +33,12 @@ pub struct MyApp {
     decoded_rx: Option<Receiver<GpuImageRequest>>,
     decoded_tx: Option<Sender<GpuImageRequest>>,
     // 追加: GPUテクスチャキャッシュ
-    texture_cache: HashMap<PathBuf, TextureId>,
+    texture_cache: HashMap<PathBuf, CachedTexture>,
     thread_pool: Option<Arc<ThreadPool>>,
+    // 追加: ズーム、パン、回転の状態を保持
+    pub zoom: f32,
+    pub pan: egui::Vec2,
+    pub rotation_rad: f32,
 }
 impl Default for MyApp {
     fn default() -> Self {
@@ -49,6 +58,9 @@ impl Default for MyApp {
             decoded_tx: Some(tx),
             texture_cache: HashMap::new(),
             thread_pool: Some(Arc::new(pool)),
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            rotation_rad: 0.0,
         }
     }
 }
@@ -76,7 +88,14 @@ impl eframe::App for MyApp {
                     );
                     // register_wgpu_texture_to_eguiを使ってTextureIdを取得
                     let tex_id = register_wgpu_texture_to_egui(frame, &view);
-                    self.texture_cache.insert(req.path.clone(), tex_id);
+                    self.texture_cache.insert(
+                        req.path.clone(),
+                        CachedTexture {
+                            tex_id,
+                            width: req.width,
+                            height: req.height,
+                        },
+                    );
 
                     //print
                     println!(
@@ -97,10 +116,16 @@ impl eframe::App for MyApp {
             // TextureIdから画像の表示
             if !self.image_files.is_empty() {
                 let current_path = &self.image_files[self.current_index];
-                if let Some(&tex_id) = self.texture_cache.get(current_path) {
-                    // 仮に512x512で表示
-                    let size = egui::Vec2::new(512.0, 512.0);
-                    ui.image((tex_id, size));
+                if let Some(cached) = self.texture_cache.get(current_path) {
+                    show_image_viewer_mesh_interactive(
+                        ui,
+                        cached.tex_id,
+                        &mut self.zoom,
+                        &mut self.pan,
+                        &mut self.rotation_rad,
+                        cached.width as f32,
+                        cached.height as f32,
+                    );
                 } else {
                     ui.label("Loading...");
                 }
@@ -163,8 +188,8 @@ fn release_unused_textures(app: &mut MyApp, frame: &mut eframe::Frame) {
         .collect();
     // テクスチャ解放
     for path in unused {
-        if let Some(tex_id) = app.texture_cache.remove(&path) {
-            unregister_wgpu_texture(frame, tex_id);
+        if let Some(cached) = app.texture_cache.remove(&path) {
+            unregister_wgpu_texture(frame, cached.tex_id);
         }
     }
 }
